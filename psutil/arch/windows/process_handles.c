@@ -1,9 +1,12 @@
 /*
- * Copyright (c) 2009, Giampaolo Rodola'. All rights reserved.
+ * Copyright (c) 2009, Giampaolo Rodola', Jeff Tang. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
- *
  */
+
+// XXX: this is very old code and very likely broken. Errors are checked
+// but instead of an exception we get an empty list + debug message.
+// Author: .
 
 #include <windows.h>
 #include <Python.h>
@@ -27,19 +30,21 @@ ULONG g_dwLength = 0;
 #define MALLOC_ZERO(x) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (x))
 
 
-static VOID
+static int
 psutil_get_open_files_init(BOOL threaded) {
-    if (g_initialized == TRUE)
-        return;
-
     // Create events for signalling work between threads
     if (threaded == TRUE) {
         g_hEvtStart = CreateEvent(NULL, FALSE, FALSE, NULL);
         g_hEvtFinish = CreateEvent(NULL, FALSE, FALSE, NULL);
+        if ((g_hEvtStart == NULL) || (g_hEvtFinish == NULL)) {
+            psutil_debug("CreateEvent failed");
+            return 1;
+        }
         InitializeCriticalSection(&g_cs);
     }
 
     g_initialized = TRUE;
+    return 0;
 }
 
 
@@ -47,16 +52,16 @@ static DWORD WINAPI
 psutil_wait_thread(LPVOID lpvParam) {
     // Loop infinitely waiting for work
     while (TRUE) {
-        WaitForSingleObject(g_hEvtStart, INFINITE);
-
-        // TODO: return code not checked
+        if (WaitForSingleObject(g_hEvtStart, INFINITE) == WAIT_FAILED)
+            psutil_debug("WaitForSingleObject failed");
         g_status = NtQueryObject(
             g_hFile,
             ObjectNameInformation,
             g_pNameBuffer,
             g_dwSize,
             &g_dwLength);
-        SetEvent(g_hEvtFinish);
+        if (SetEvent(g_hEvtFinish) == 0)
+            psutil_debug("SetEvent failed");
     }
 }
 
@@ -73,22 +78,28 @@ psutil_create_thread() {
             NULL,
             0,
             NULL);
-    if (g_hThread == NULL)
+    if (g_hThread == NULL) {
+        psutil_debug("CreateThread failed");
         return GetLastError();
+    }
 
     // Signal the worker thread to start
     SetEvent(g_hEvtStart);
 
     // Wait for the worker thread to finish
     dwWait = WaitForSingleObject(g_hEvtFinish, NTQO_TIMEOUT);
+    if (dwWait == WAIT_FAILED)
+        psutil_debug("WaitForSingleObject failed");
 
     // If the thread hangs, kill it and cleanup
     if (dwWait == WAIT_TIMEOUT) {
-        SuspendThread(g_hThread);
-        TerminateThread(g_hThread, 1);
-        WaitForSingleObject(g_hThread, INFINITE);
+        if (SuspendThread(g_hThread) == -1)
+            psutil_debug("SuspendThread failed");
+        if (TerminateThread(g_hThread, 1) == 0)
+            psutil_debug("TerminateThread failed");
+        if (WaitForSingleObject(g_hThread, INFINITE))
+            psutil_debug("WaitForSingleObject failed");
         CloseHandle(g_hThread);
-
         g_hThread = NULL;
     }
 
@@ -106,11 +117,14 @@ psutil_get_open_files(DWORD dwPid, HANDLE hProcess) {
     DWORD                               i = 0;
     BOOLEAN                             error = FALSE;
     DWORD                               dwWait = 0;
-    PyObject*                           py_retlist = NULL;
     PyObject*                           py_path = NULL;
+    PyObject*                           py_retlist = PyList_New(0);
 
+    if (!py_retlist)
+        return NULL;
     if (g_initialized == FALSE)
-        psutil_get_open_files_init(TRUE);
+        if (psutil_get_open_files_init(TRUE) == 1)
+            return NULL;
 
     // Due to the use of global variables, ensure only 1 call
     // to psutil_get_open_files() is running
@@ -123,7 +137,6 @@ psutil_get_open_files(DWORD dwPid, HANDLE hProcess) {
     }
 
     // Py_BuildValue raises an exception if NULL is returned
-    py_retlist = PyList_New(0);
     if (py_retlist == NULL) {
         error = TRUE;
         goto cleanup;
@@ -141,6 +154,7 @@ psutil_get_open_files(DWORD dwPid, HANDLE hProcess) {
         pHandleInfo = MALLOC_ZERO(dwInfoSize);
 
         if (pHandleInfo == NULL) {
+            psutil_debug("malloc failed");
             PyErr_NoMemory();
             error = TRUE;
             goto cleanup;
@@ -153,6 +167,7 @@ psutil_get_open_files(DWORD dwPid, HANDLE hProcess) {
 
     // NtQuerySystemInformation stopped giving us STATUS_INFO_LENGTH_MISMATCH
     if (! NT_SUCCESS(status)) {
+        psutil_debug("NtQuerySystemInformation failed");
         psutil_SetFromNTStatusErr(
             status, "NtQuerySystemInformation(SystemExtendedHandleInformation)");
         error = TRUE;
@@ -174,6 +189,7 @@ psutil_get_open_files(DWORD dwPid, HANDLE hProcess) {
                              TRUE,
                              DUPLICATE_SAME_ACCESS))
         {
+            psutil_debug("DuplicateHandle failed");
             goto loop_cleanup;
         }
 
@@ -210,19 +226,23 @@ psutil_get_open_files(DWORD dwPid, HANDLE hProcess) {
         } while (g_status == STATUS_INFO_LENGTH_MISMATCH);
 
         // NtQueryObject stopped returning STATUS_INFO_LENGTH_MISMATCH
-        if (!NT_SUCCESS(g_status))
+        if (!NT_SUCCESS(g_status)) {
+            psutil_debug("NtQueryObject failed");
             goto loop_cleanup;
+        }
 
         // Convert to PyUnicode and append it to the return list
         if (g_pNameBuffer->Length > 0) {
             py_path = PyUnicode_FromWideChar(g_pNameBuffer->Buffer,
                                              g_pNameBuffer->Length / 2);
             if (py_path == NULL) {
+                psutil_debug("PyUnicode_FromWideChar failed");
                 error = TRUE;
                 goto loop_cleanup;
             }
 
             if (PyList_Append(py_retlist, py_path)) {
+                psutil_debug("PyList_Append failed");
                 error = TRUE;
                 goto loop_cleanup;
             }
