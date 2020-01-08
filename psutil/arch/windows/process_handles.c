@@ -181,6 +181,10 @@ psutil_get_open_files(DWORD dwPid, HANDLE hProcess) {
         if ((ULONG_PTR)hHandle->UniqueProcessId != dwPid)
             goto loop_cleanup;
 
+        // not a file
+        if (GetFileType((HANDLE)hHandle->HandleValue) != FILE_TYPE_DISK)
+            goto loop_cleanup;
+
         if (!DuplicateHandle(hProcess,
                              (HANDLE)hHandle->HandleValue,
                              GetCurrentProcess(),
