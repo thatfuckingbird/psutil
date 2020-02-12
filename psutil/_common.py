@@ -44,8 +44,8 @@ PY3 = sys.version_info[0] == 3
 
 __all__ = [
     # constants
-    'FREEBSD', 'BSD', 'LINUX', 'NETBSD', 'OPENBSD', 'MACOS', 'OSX', 'POSIX',
-    'SUNOS', 'WINDOWS',
+    'FREEBSD', 'BSD', 'HAIKU', 'LINUX', 'NETBSD', 'OPENBSD', 'MACOS', 'OSX',
+    'POSIX', 'SUNOS', 'WINDOWS',
     'ENCODING', 'ENCODING_ERRS', 'AF_INET6',
     # connection constants
     'CONN_CLOSE', 'CONN_CLOSE_WAIT', 'CONN_CLOSING', 'CONN_ESTABLISHED',
@@ -86,6 +86,7 @@ NETBSD = sys.platform.startswith("netbsd")
 BSD = FREEBSD or OPENBSD or NETBSD
 SUNOS = sys.platform.startswith(("sunos", "solaris"))
 AIX = sys.platform.startswith("aix")
+HAIKU = sys.platform.startswith("haiku")
 
 
 # ===================================================================
